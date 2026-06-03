@@ -159,7 +159,8 @@ async def edit_command(message: Message, state: FSMContext):
             text=f"{row['title']} - {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}",
             callback_data=f"edit_{row['id']}"
         )])
-    
+
+    buttons.append([InlineKeyboardButton(text="Отменить", callback_data="cancel")])
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Выбери задачу, которую хочешь изменить:", reply_markup=markup)
     await state.set_state(FSM.waiting_for_answer)
@@ -167,12 +168,20 @@ async def edit_command(message: Message, state: FSMContext):
 
 @dp.callback_query(StateFilter(FSM.waiting_for_answer))
 async def answer(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "cancel":
+        await callback.message.delete()
+        await callback.message.answer("❌ Действие отменено.")
+        await state.clear()
+        await callback.answer()
+        return
+    
     task_id = callback.data.split("_")[1]
     await state.update_data(task_id=task_id)
     
     buttons = [[
         InlineKeyboardButton(text="✏️ Название", callback_data="change_title"),
-        InlineKeyboardButton(text="📅 Дату", callback_data="change_date")
+        InlineKeyboardButton(text="📅 Дату", callback_data="change_date"),
+        InlineKeyboardButton(text="Отменить", callback_data="cancel")
     ]]
 
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -183,6 +192,12 @@ async def answer(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(StateFilter(FSM.waiting_for_edit_choice))
 async def choice(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "cancel":
+        await callback.message.delete()
+        await callback.message.answer("❌ Действие отменено.")
+        await state.clear()
+        await callback.answer()
+
     if callback.data == "change_title":
         await callback.message.delete()
         await callback.message.answer("✏️ Напиши новое название для задачи.")
@@ -233,9 +248,10 @@ async def delete_command(message: Message, state: FSMContext):
     for row in deadlines:
         buttons.append([InlineKeyboardButton(
             text=f"{row['title']} - {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}",
-            callback_data=f"edit_{row['id']}"
+            callback_data=f"delete_{row['id']}"
         )])
-    
+
+    buttons.append([InlineKeyboardButton(text="Отменить", callback_data="cancel")])
     markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     await message.answer("Выбери задачу, которую хочешь удалить:", reply_markup=markup)
     await state.set_state(FSM.waiting_for_delete)
@@ -243,6 +259,13 @@ async def delete_command(message: Message, state: FSMContext):
 
 @dp.callback_query(StateFilter(FSM.waiting_for_delete))
 async def delete_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "cancel":
+        await callback.message.delete()
+        await callback.message.answer("❌ Действие отменено.")
+        await state.clear()
+        await callback.answer()
+        return
+    
     task_id = int(callback.data.split("_")[1])
     async with pool.acquire() as conn:
         await delete_task(conn, task_id, callback.from_user.id)
@@ -252,7 +275,7 @@ async def delete_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
-
+ 
 @dp.message(StateFilter(default_state))
 async def wrong_messages(message: Message):
     await message.answer("Для того чтобы пользоваться ботом, используй команды из списка.\n\nПосмотреть список команд - /help")
@@ -273,4 +296,4 @@ async def main():
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())
