@@ -4,8 +4,8 @@ import asyncpg
 import asyncio
 from dotenv import load_dotenv
 import os
-from database import create_tables
-
+from database import create_tables, add_user
+ 
 load_dotenv()
 pool = None
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -15,6 +15,8 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def start_command(message: Message):
+    async with pool.acquire() as conn:
+        await add_user(conn, message.from_user.id, message.from_user.username)
     await message.answer("""
     👋 Привет! Я Reminder Bot - помогу не забыть о важных дедлайнах.
 

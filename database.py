@@ -18,3 +18,8 @@ async def create_tables(conn):
         )
     ''')
 
+async def add_user(conn, user_id, username):
+    await conn.execute("""
+        INSERT INTO users (user_id, username)
+        VALUES ($1, $2)
+        """, user_id, username)
