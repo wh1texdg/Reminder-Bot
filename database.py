@@ -46,3 +46,8 @@ async def edit_task(conn, id, user_id, title=None, deadline_at=None):
             UPDATE deadlines SET deadline_at = $1
             WHERE id = $2 AND user_id = $3
         """, deadline_at, id, user_id)
+
+async def delete_task(conn, id, user_id):
+    await conn.execute("""
+        DELETE FROM deadlines WHERE id = $1 AND user_id = $2
+    """, id, user_id)

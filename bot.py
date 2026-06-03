@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state, State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime
-from database import create_tables, add_user, get_deadlines, add_task, edit_task
+from database import create_tables, add_user, get_deadlines, add_task, edit_task, delete_task
  
 
 load_dotenv()
@@ -27,6 +27,7 @@ class FSM(StatesGroup):
     waiting_for_edit_choice = State()
     waiting_for_title_choice = State()
     waiting_for_deadline_choice = State()
+    waiting_for_delete = State()
 
 @dp.message(Command("cancel"), ~StateFilter(default_state))
 async def cancel_command(message: Message, state: FSMContext):
@@ -62,8 +63,8 @@ async def help_command(message: Message):
 /list - Показать все твои задачи
 Выводит список активных дедлайнов.
 
-/done - Отметить задачу выполненной
-Задача удаляется из списка активных.
+/edit - Изменить задачу
+Меняет название или дату задачи.
 
 /delete - Удалить задачу
 Удаляет задачу из списка.
@@ -155,7 +156,7 @@ async def edit_command(message: Message, state: FSMContext):
     buttons = []
     for row in deadlines:
         buttons.append([InlineKeyboardButton(
-            text=f"{row['title']} — {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}",
+            text=f"{row['title']} - {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}",
             callback_data=f"edit_{row['id']}"
         )])
     
@@ -217,6 +218,44 @@ async def deadline_choice(message: Message, state: FSMContext):
 
     await message.answer("✅ Дата обновлена!\n\nНапиши /list для просмотра списка задач.")
     await state.clear()
+
+
+@dp.message(Command("delete"), StateFilter(default_state))
+async def delete_command(message: Message, state: FSMContext):
+    async with pool.acquire() as conn:
+        deadlines = await get_deadlines(conn, message.from_user.id)
+    
+    if not deadlines:
+        await message.answer("📋 У тебя пока нет задач.\n\nНапиши /add, чтобы добавить новую задачу.")
+        return
+    
+    buttons = []
+    for row in deadlines:
+        buttons.append([InlineKeyboardButton(
+            text=f"{row['title']} - {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}",
+            callback_data=f"edit_{row['id']}"
+        )])
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Выбери задачу, которую хочешь удалить:", reply_markup=markup)
+    await state.set_state(FSM.waiting_for_delete)
+
+
+@dp.callback_query(StateFilter(FSM.waiting_for_delete))
+async def delete_callback(callback: CallbackQuery, state: FSMContext):
+    task_id = int(callback.data.split("_")[1])
+    async with pool.acquire() as conn:
+        await delete_task(conn, task_id, callback.from_user.id)
+    
+    await callback.message.delete()
+    await callback.message.answer("✅ Задача удалена!\n\nНапиши /list для просмотра списка задач.")
+    await state.clear()
+    await callback.answer()
+
+
+@dp.message(StateFilter(default_state))
+async def wrong_messages(message: Message):
+    await message.answer("Для того чтобы пользоваться ботом, используй команды из списка.\n\nПосмотреть список команд - /help")
 
 
 async def main():
