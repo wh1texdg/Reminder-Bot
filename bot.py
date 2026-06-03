@@ -4,7 +4,7 @@ import asyncpg
 import asyncio
 from dotenv import load_dotenv
 import os
-from database import create_tables, add_user
+from database import create_tables, add_user, get_deadlines
  
 load_dotenv()
 pool = None
@@ -50,6 +50,21 @@ async def help_command(message: Message):
 /cancel - Отменить текущее действие
 Используй, если хочешь прервать добавление задачи.
     """)
+
+@dp.message(Command("list"))
+async def list_command(message: Message):
+    async with pool.acquire() as conn:
+        deadlines = await get_deadlines(conn, message.from_user.id)
+    
+    if not deadlines:
+        await message.answer("У тебя пока нет задач. Напиши /add, чтобы добавить новую задачу.")
+        return
+    
+    text = "📋 Твои дедлайны:\n\n"
+    for i, row in enumerate(deadlines, 1):
+        text += f"{i}. {row['title']} — {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}\n"
+    
+    await message.answer(text)
 
 
 async def main():
