@@ -29,3 +29,9 @@ async def get_deadlines(conn, user_id):
     return await conn.fetch(
         "SELECT * FROM deadlines WHERE user_id = $1",
         user_id)
+
+async def add_task(conn,user_id,title, deadline_at):
+    await conn.execute("""
+        INSERT INTO deadlines (user_id, title, deadline_at) 
+        VALUES ($1, $2, $3)
+    """, user_id, title, deadline_at)
