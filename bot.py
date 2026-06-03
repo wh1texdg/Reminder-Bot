@@ -9,8 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state, State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime
-from database import create_tables, add_user, get_deadlines, add_task, edit_task, delete_task
- 
+from database import create_tables, add_user, get_deadlines, add_task, edit_task, delete_task,get_all_deadlines
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 load_dotenv()
 pool = None
@@ -28,6 +28,7 @@ class FSM(StatesGroup):
     waiting_for_title_choice = State()
     waiting_for_deadline_choice = State()
     waiting_for_delete = State()
+    waiting_for_remind_mode = State()
 
 @dp.message(Command("cancel"), ~StateFilter(default_state))
 async def cancel_command(message: Message, state: FSMContext):
@@ -107,42 +108,24 @@ async def good_title(message: Message, state: FSMContext):
 async def get_date(message: Message, state: FSMContext):
     try:
         deadline = datetime.strptime(message.text, "%d.%m.%Y %H:%M")
-        await state.update_data(deadline=deadline)
     except ValueError:
         await message.answer("❌ Неверный формат.\n\nВведи дату так: число.месяц.год 14:30")
         return
-    first_button = InlineKeyboardButton(
-        text = "Да, сохранить",
-        callback_data= "yes"
-    )
-    second_button = InlineKeyboardButton(
-        text = "Нет, начать заново",
-        callback_data= "no"
-    )
-    keyboard: list[list[InlineKeyboardButton]] = [
-        [first_button, second_button]
-    ]
-    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-    data = await state.get_data()
-    await message.answer(
-    text=f"📌 {data['title']} - {deadline.strftime('%d.%m.%Y %H:%M')}\n\nВсё верно?",
-    reply_markup=markup
-    )
-
-@dp.callback_query(StateFilter(FSM.waiting_for_date), F.data.in_(["yes", "no"]))
-async def callback(callback: CallbackQuery, state: FSMContext):
-    if callback.data == "yes":
-        data = await state.get_data()
-        async with pool.acquire() as conn:
-            await add_task(conn, callback.from_user.id, data['title'], data['deadline'])
     
-        await callback.message.delete()
-        await callback.message.answer("✅ Задача добавлена!\n\nДля просмотра всех задач напиши /list")
-        await state.clear()
-    else:
-        await callback.message.delete()
-        await callback.message.answer("❌ Действие отменено.\n\nНапиши /add, чтобы начать заново.")
-        await state.clear()
+    if deadline <= datetime.now():
+        await message.answer("❌ Дедлайн должен быть в будущем.\n\nВведи дату, которая ещё не наступила.")
+        return
+
+    await state.update_data(deadline=deadline)
+    buttons = [[
+        InlineKeyboardButton(text="🔔 За 48/24/12 часов", callback_data="mode_intervals"),
+        InlineKeyboardButton(text="📅 Каждый день", callback_data="mode_daily")
+    ]]
+
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Как напоминать о дедлайне?", reply_markup=markup)
+    await state.set_state(FSM.waiting_for_remind_mode)
+
 
 @dp.message(Command("edit"), StateFilter(default_state))
 async def edit_command(message: Message, state: FSMContext):
@@ -275,11 +258,69 @@ async def delete_callback(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
+@dp.callback_query(StateFilter(FSM.waiting_for_remind_mode))
+async def remind_mode_callback(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "mode_intervals":
+        mode = "intervals"
+    else:
+        mode = "daily"
+
+    data = await state.get_data()
+    async with pool.acquire() as conn:
+        await add_task(conn, callback.from_user.id, data['title'], data['deadline'], mode)
+
+    if callback.data == "mode_intervals":
+        mode_text = "За 48/24/12 часов"
+    else:
+        mode_text = "Каждый день"
+
+    await callback.message.edit_text(
+        f"✅ Задача добавлена!\n📌 {data['title']}\n🔔 Выбранный режим напоминания: {mode_text}\n\nНапиши /list для просмотра задач."
+    )
+    await state.clear()
+    await callback.answer()
+
  
 @dp.message(StateFilter(default_state))
 async def wrong_messages(message: Message):
     await message.answer("Для того чтобы пользоваться ботом, используй команды из списка.\n\nПосмотреть список команд - /help")
 
+async def check_deadlines():
+    async with pool.acquire() as conn:
+        rows = await get_all_deadlines(conn)
+        now = datetime.now()
+
+        for row in rows:
+            hours_left = (row['deadline_at'] - now).total_seconds() / 3600
+
+            if row['remind_mode'] == 'intervals':
+                if hours_left <= 48 and not row['reminded_48h']:
+                    await bot.send_message(row['user_id'],
+                        f"⏰ {row['title']}\nОсталось 48 часов до дедлайна!")
+                    await conn.execute(
+                        "UPDATE deadlines SET reminded_48h = TRUE WHERE id = $1", row['id'])
+
+                if hours_left <= 24 and not row['reminded_24h']:
+                    await bot.send_message(row['user_id'],
+                        f"⏰ {row['title']}\nОсталось 24 часа до дедлайна!")
+                    await conn.execute(
+                        "UPDATE deadlines SET reminded_24h = TRUE WHERE id = $1", row['id'])
+
+                if hours_left <= 12 and not row['reminded_12h']:
+                    await bot.send_message(row['user_id'],
+                        f"⏰ {row['title']}\nОсталось 12 часов до дедлайна!")
+                    await conn.execute(
+                        "UPDATE deadlines SET reminded_12h = TRUE WHERE id = $1", row['id'])
+
+            elif row['remind_mode'] == 'daily':
+                last = row['last_reminded_at']
+                if hours_left > 0:
+                    if last is None or (now - last).total_seconds() >= 86400:
+                        await bot.send_message(row['user_id'],
+                            f"📅 {row['title']}\nОсталось {int(hours_left)} часов до дедлайна!")
+                        await conn.execute(
+                            "UPDATE deadlines SET last_reminded_at = $1 WHERE id = $2",
+                            now, row['id'])
 
 async def main():
     global pool
@@ -292,6 +333,10 @@ async def main():
     )
     async with pool.acquire() as conn:
         await create_tables(conn)
+    
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(check_deadlines, "interval", minutes=1)
+    scheduler.start()
     
     await dp.start_polling(bot)
 

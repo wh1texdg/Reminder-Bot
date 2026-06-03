@@ -13,7 +13,12 @@ async def create_tables(conn):
             id SERIAL PRIMARY KEY,
             user_id BIGINT REFERENCES users(user_id),
             title TEXT,
-            deadline_at TIMESTAMP
+            deadline_at TIMESTAMP,
+            remind_mode TEXT DEFAULT 'intervals',
+            reminded_48h BOOLEAN DEFAULT FALSE,
+            reminded_24h BOOLEAN DEFAULT FALSE,
+            reminded_12h BOOLEAN DEFAULT FALSE,
+            last_reminded_at TIMESTAMP
         )
     ''')
 
@@ -29,11 +34,11 @@ async def get_deadlines(conn, user_id):
         "SELECT * FROM deadlines WHERE user_id = $1 ORDER BY deadline_at",
         user_id)
 
-async def add_task(conn,user_id,title, deadline_at):
+async def add_task(conn,user_id,title, deadline_at,remind_mode):
     await conn.execute("""
-        INSERT INTO deadlines (user_id, title, deadline_at) 
-        VALUES ($1, $2, $3)
-    """, user_id, title, deadline_at)
+        INSERT INTO deadlines (user_id, title, deadline_at,remind_mode) 
+        VALUES ($1, $2, $3, $4)
+    """, user_id, title, deadline_at,remind_mode)
 
 async def edit_task(conn, id, user_id, title=None, deadline_at=None):
     if title:
@@ -51,3 +56,6 @@ async def delete_task(conn, id, user_id):
     await conn.execute("""
         DELETE FROM deadlines WHERE id = $1 AND user_id = $2
     """, id, user_id)
+
+async def get_all_deadlines(conn):
+    return await conn.fetch("SELECT * FROM deadlines")
