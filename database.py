@@ -1,5 +1,4 @@
 import asyncio
-import asyncpg
 
 async def create_tables(conn):
     await conn.execute('''
@@ -27,7 +26,7 @@ async def add_user(conn, user_id, username):
     
 async def get_deadlines(conn, user_id):
     return await conn.fetch(
-        "SELECT * FROM deadlines WHERE user_id = $1",
+        "SELECT * FROM deadlines WHERE user_id = $1 ORDER BY deadline_at",
         user_id)
 
 async def add_task(conn,user_id,title, deadline_at):
@@ -35,3 +34,15 @@ async def add_task(conn,user_id,title, deadline_at):
         INSERT INTO deadlines (user_id, title, deadline_at) 
         VALUES ($1, $2, $3)
     """, user_id, title, deadline_at)
+
+async def edit_task(conn, id, user_id, title=None, deadline_at=None):
+    if title:
+        await conn.execute("""
+            UPDATE deadlines SET title = $1
+            WHERE id = $2 AND user_id = $3
+        """, title, id, user_id)
+    if deadline_at:
+        await conn.execute("""
+            UPDATE deadlines SET deadline_at = $1
+            WHERE id = $2 AND user_id = $3
+        """, deadline_at, id, user_id)

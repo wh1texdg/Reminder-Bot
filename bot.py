@@ -9,7 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state, State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from datetime import datetime
-from database import create_tables, add_user, get_deadlines, add_task
+from database import create_tables, add_user, get_deadlines, add_task, edit_task
  
 
 load_dotenv()
@@ -23,7 +23,15 @@ dp = Dispatcher(storage=storage)
 class FSM(StatesGroup):
     waiting_for_title = State()
     waiting_for_date = State()
+    waiting_for_answer = State()
+    waiting_for_edit_choice = State()
+    waiting_for_title_choice = State()
+    waiting_for_deadline_choice = State()
 
+@dp.message(Command("cancel"), ~StateFilter(default_state))
+async def cancel_command(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Действие отменено.\n\nНапиши /add, чтобы начать заново.")
 
 @dp.message(Command("start"))
 async def start_command(message: Message):
@@ -71,7 +79,7 @@ async def list_command(message: Message):
         deadlines = await get_deadlines(conn, message.from_user.id)
     
     if not deadlines:
-        await message.answer("У тебя пока нет задач. Напиши /add, чтобы добавить новую задачу.")
+        await message.answer("📋 У тебя пока нет задач.\n\nНапиши /add, чтобы добавить новую задачу.")
         return
     
     text = "📋 Твои дедлайны:\n\n"
@@ -83,15 +91,14 @@ async def list_command(message: Message):
 
 @dp.message(Command("add"), StateFilter(default_state))
 async def add_command(message: Message, state: FSMContext):
-    await state.update_data(title=message.text)
-    await message.answer("Введите название задачи. Например: Дописать курсовую работу.")
+    await message.answer("📋 Введи название задачи.\n\nНапример: Дописать курсовую работу.")
     await state.set_state(FSM.waiting_for_title)
 
 
 @dp.message(StateFilter(FSM.waiting_for_title), F.text)
 async def good_title(message: Message, state: FSMContext):
     await state.update_data(title=message.text)
-    await message.answer("Отлично! Теперь введите дату дедлайна. Пример: число.месяц.год 14:30")
+    await message.answer("Отлично! Теперь введи дату дедлайна.\n\nПример: число.месяц.год 14:30")
     await state.set_state(FSM.waiting_for_date)
 
 
@@ -101,7 +108,7 @@ async def get_date(message: Message, state: FSMContext):
         deadline = datetime.strptime(message.text, "%d.%m.%Y %H:%M")
         await state.update_data(deadline=deadline)
     except ValueError:
-        await message.answer("Неверный формат. Введите дату так: число.месяц.год 14:30")
+        await message.answer("❌ Неверный формат.\n\nВведи дату так: число.месяц.год 14:30")
         return
     first_button = InlineKeyboardButton(
         text = "Да, сохранить",
@@ -117,7 +124,7 @@ async def get_date(message: Message, state: FSMContext):
     markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     data = await state.get_data()
     await message.answer(
-    text=f"📌 {data['title']} - {deadline.strftime('%d.%m.%Y %H:%M')}\nВсё верно?",
+    text=f"📌 {data['title']} - {deadline.strftime('%d.%m.%Y %H:%M')}\n\nВсё верно?",
     reply_markup=markup
     )
 
@@ -129,18 +136,87 @@ async def callback(callback: CallbackQuery, state: FSMContext):
             await add_task(conn, callback.from_user.id, data['title'], data['deadline'])
     
         await callback.message.delete()
-        await callback.message.answer("✅ Задача добавлена!\n\n Для просмотра всех задач напишите /list")
+        await callback.message.answer("✅ Задача добавлена!\n\nДля просмотра всех задач напиши /list")
         await state.clear()
     else:
         await callback.message.delete()
-        await callback.message.answer("❌ Действие отменено.\n\n Напишите /add, чтобы начать заново.")
+        await callback.message.answer("❌ Действие отменено.\n\nНапиши /add, чтобы начать заново.")
         await state.clear()
 
+@dp.message(Command("edit"), StateFilter(default_state))
+async def edit_command(message: Message, state: FSMContext):
+    async with pool.acquire() as conn:
+        deadlines = await get_deadlines(conn, message.from_user.id)
+    
+    if not deadlines:
+        await message.answer("📋 У тебя пока нет задач.\n\nНапиши /add, чтобы добавить новую задачу.")
+        return
+    
+    buttons = []
+    for row in deadlines:
+        buttons.append([InlineKeyboardButton(
+            text=f"{row['title']} — {row['deadline_at'].strftime('%d.%m.%Y %H:%M')}",
+            callback_data=f"edit_{row['id']}"
+        )])
+    
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Выбери задачу, которую хочешь изменить:", reply_markup=markup)
+    await state.set_state(FSM.waiting_for_answer)
 
-@dp.message(Command("cancel"), ~StateFilter(default_state))
-async def cancel_command(message: Message, state: FSMContext):
+
+@dp.callback_query(StateFilter(FSM.waiting_for_answer))
+async def answer(callback: CallbackQuery, state: FSMContext):
+    task_id = callback.data.split("_")[1]
+    await state.update_data(task_id=task_id)
+    
+    buttons = [[
+        InlineKeyboardButton(text="✏️ Название", callback_data="change_title"),
+        InlineKeyboardButton(text="📅 Дату", callback_data="change_date")
+    ]]
+
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text("Что хочешь изменить?", reply_markup=markup)
+    await state.set_state(FSM.waiting_for_edit_choice)
+    await callback.answer()
+
+
+@dp.callback_query(StateFilter(FSM.waiting_for_edit_choice))
+async def choice(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "change_title":
+        await callback.message.delete()
+        await callback.message.answer("✏️ Напиши новое название для задачи.")
+        await state.set_state(FSM.waiting_for_title_choice)
+    else:
+        await callback.message.delete()
+        await callback.message.answer("✏️ Напиши новую дату для задачи.\n\n Пример: число.месяц.год 14:30")
+        await state.set_state(FSM.waiting_for_deadline_choice)
+    await callback.answer()
+
+
+@dp.message(StateFilter(FSM.waiting_for_title_choice))
+async def title_choice(message: Message, state: FSMContext):
+    data = await state.get_data()
+    async with pool.acquire() as conn:
+        await edit_task(conn, int(data['task_id']), message.from_user.id, title = message.text)
+    
+    await message.answer("✅ Название обновлено!\n\nНапиши /list для просмотра списка задач.")
     await state.clear()
-    await message.answer("❌ Действие отменено.\n\n Напишите /add, чтобы начать заново.")
+
+
+@dp.message(StateFilter(FSM.waiting_for_deadline_choice))
+async def deadline_choice(message: Message, state: FSMContext):
+    try:
+        deadline = datetime.strptime(message.text, "%d.%m.%Y %H:%M")
+    except ValueError:
+        await message.answer("❌ Неверный формат.\n\nВведи дату так: число.месяц.год 14:30")
+        return
+    
+    data = await state.get_data()
+    async with pool.acquire() as conn:
+        await edit_task(conn, int(data['task_id']), message.from_user.id, deadline_at=deadline)
+
+    await message.answer("✅ Дата обновлена!\n\nНапиши /list для просмотра списка задач.")
+    await state.clear()
 
 
 async def main():
