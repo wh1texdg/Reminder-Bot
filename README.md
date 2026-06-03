@@ -25,7 +25,41 @@ Telegram-бот для создания напоминаний о дедлайн
 "/cancel" - Отменить текущее действие (если бот что-то спрашивает) 
 
 ## Установка и запуск
-### Клонируй репозиторий
-
+### 1. Клонируй репозиторий
+```bash
 git clone https://github.com/wh1texdg/Reminder-Bot.git
 cd Reminder-Bot
+```
+
+### 2. Создай виртуальное окружение
+```bash
+python -m venv venv
+source venv/bin/activate  # для Linux/macOS
+venv\Scripts\activate    # для Windows
+```
+
+### 3. Установи зависимости
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Настрой переменные окружения
+Скопируй `.env.example` в `.env` и заполни своими данными:
+```bash
+cp .env.example .env
+```
+
+Пример содержимого `.env`:
+```env
+BOT_TOKEN=твой_токен_от_BotFather
+DB_USER=postgres
+DB_PASSWORD=твой_пароль
+DB_NAME=reminder_bot_database
+DB_HOST=localhost
+DB_PORT=5432
+```
+
+### 5. Запусти бота
+```bash
+python bot.py
+```
