@@ -1,5 +1,6 @@
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, StateFilter
+from aiogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
 import asyncpg
 import asyncio
 from dotenv import load_dotenv
@@ -82,6 +83,7 @@ async def list_command(message: Message):
 
 @dp.message(Command("add"), StateFilter(default_state))
 async def add_command(message: Message, state: FSMContext):
+    await state.update_data(title=message.text)
     await message.answer("Введите название задачи. Например: Дописать курсовую работу.")
     await state.set_state(FSM.waiting_for_title)
 
@@ -97,16 +99,48 @@ async def good_title(message: Message, state: FSMContext):
 async def get_date(message: Message, state: FSMContext):
     try:
         deadline = datetime.strptime(message.text, "%d.%m.%Y %H:%M")
+        await state.update_data(deadline=deadline)
     except ValueError:
         await message.answer("Неверный формат. Введите дату так: число.месяц.год 14:30")
         return
-    
+    first_button = InlineKeyboardButton(
+        text = "Да, сохранить",
+        callback_data= "yes"
+    )
+    second_button = InlineKeyboardButton(
+        text = "Нет, начать заново",
+        callback_data= "no"
+    )
+    keyboard: list[list[InlineKeyboardButton]] = [
+        [first_button, second_button]
+    ]
+    markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
     data = await state.get_data()
-    async with pool.acquire() as conn:
-        await add_task(conn, message.from_user.id, data['title'], deadline)
+    await message.answer(
+    text=f"📌 {data['title']} - {deadline.strftime('%d.%m.%Y %H:%M')}\nВсё верно?",
+    reply_markup=markup
+    )
+
+@dp.callback_query(StateFilter(FSM.waiting_for_date), F.data.in_(["yes", "no"]))
+async def callback(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "yes":
+        data = await state.get_data()
+        async with pool.acquire() as conn:
+            await add_task(conn, callback.from_user.id, data['title'], data['deadline'])
     
-    await message.answer("✅ Задача добавлена!")
+        await callback.message.delete()
+        await callback.message.answer("✅ Задача добавлена!\n\n Для просмотра всех задач напишите /list")
+        await state.clear()
+    else:
+        await callback.message.delete()
+        await callback.message.answer("❌ Действие отменено.\n\n Напишите /add, чтобы начать заново.")
+        await state.clear()
+
+
+@dp.message(Command("cancel"), ~StateFilter(default_state))
+async def cancel_command(message: Message, state: FSMContext):
     await state.clear()
+    await message.answer("❌ Действие отменено.\n\n Напишите /add, чтобы начать заново.")
 
 
 async def main():
